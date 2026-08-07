@@ -1,0 +1,11 @@
+{
+  "domain": "alphavision",
+  "name": "AlphaVision ML",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://www.alphatronics.nl/",
+  "iot_class": "local_polling",
+  "issue_tracker": "",
+  "requirements": ["pycryptodome>=3.20.0"],
+  "version": "0.1.0"
+}
