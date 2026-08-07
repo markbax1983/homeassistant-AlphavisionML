@@ -55,4 +55,4 @@ Gebruik op eigen risico.
 
 ## Licentie
 
-Nog niet gespecificeerd.
+[MIT](LICENSE)
