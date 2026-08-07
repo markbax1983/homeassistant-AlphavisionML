@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect AlphaVision ML",
+        "description": "Enter the network details of the Generic Interface (AlphaTool: System settings > IP settings > Generic interface).",
+        "data": {
+          "host": "IP address",
+          "port": "Port",
+          "key": "Encryption key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect. Check the IP address, port, and encryption key."
+    },
+    "abort": {
+      "already_configured": "This panel is already configured."
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AlphaVision ML verbinden",
+        "description": "Vul de netwerkgegevens van de Generieke Interface in (AlphaTool: Systeem instellingen > IP instellingen > Generieke interface).",
+        "data": {
+          "host": "IP-adres",
+          "port": "Poort",
+          "key": "Encryptiesleutel"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Kon geen verbinding maken. Controleer IP-adres, poort en encryptiesleutel."
+    },
+    "abort": {
+      "already_configured": "Dit paneel is al geconfigureerd."
+    }
+  }
+}
