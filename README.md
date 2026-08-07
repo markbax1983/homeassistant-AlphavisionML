@@ -53,6 +53,17 @@ Dit is een niet-officiële integratie, gebaseerd op reverse-engineering van het 
 (afgeleid van Alphatronics' eigen open-source `unii`-library voor hun UNii-productlijn).
 Gebruik op eigen risico.
 
+## Attributie
+
+Het protocol in deze integratie is gereverse-engineerd, met als vertrekpunt Alphatronics'
+eigen open-source [`unii`-library](https://pypi.org/project/unii/)
+([unii-security/py-unii](https://github.com/unii-security/py-unii), licentie:
+Apache License 2.0) voor hun UNii-productlijn. AlphaVision ML deelt de framing, CRC en
+encryptielaag met UNii; een deel van de dataformaten (o.a. equipment-informatie) wijkt af
+en is apart bevestigd via eigen testen tegen een AlphaVision ML-paneel. Er is geen code
+uit die library overgenomen; de code in deze repo is zelf herschreven op basis van dat
+protocolbegrip.
+
 ## Licentie
 
 [MIT](LICENSE)
