@@ -53,6 +53,9 @@ Dit is een niet-officiële integratie, gebaseerd op reverse-engineering van het 
 (afgeleid van Alphatronics' eigen open-source `unii`-library voor hun UNii-productlijn).
 Gebruik op eigen risico.
 
+## Contact
+github@markbax.nl
+
 ## Attributie
 
 Het protocol in deze integratie is gereverse-engineerd, met als vertrekpunt Alphatronics'
