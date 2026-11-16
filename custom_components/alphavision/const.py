@@ -6,6 +6,18 @@ CONF_KEY = "key"
 
 DEFAULT_PORT = 6502
 
+# Geldige lengtes (in bytes) van de AES-encryptiesleutel.
+KEY_LENGTHS = (16, 24, 32)
+
+# Sleutel in hass.data[DOMAIN] waar de config flow de al gevalideerde sessie
+# neerlegt, zodat de hub die kan overnemen i.p.v. opnieuw te verbinden.
+PENDING_SESSIONS = "pending_sessions"
+
+# Maximale tijd (seconden) die een arm/disarm-aanroep op een antwoord wacht.
+# Het onderliggende verzoek heeft zelf een totaalbudget van 60s plus een
+# statusopvraag; hierna krijgt de aanroeper een fout i.p.v. eindeloos te wachten.
+COMMAND_TIMEOUT = 90.0
+
 # Hoe lang op een antwoord wachten voordat een verzoek als mislukt geldt. Een
 # pakketcapture toonde aan dat het paneel bij een echte gebeurtenis (deur/
 # beweging) soms even te druk is om meteen te antwoorden, ook al blijft de

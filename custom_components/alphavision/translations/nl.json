@@ -12,7 +12,8 @@
       }
     },
     "error": {
-      "cannot_connect": "Kon geen verbinding maken. Controleer IP-adres, poort en encryptiesleutel."
+      "cannot_connect": "Kon geen verbinding maken. Controleer IP-adres, poort en encryptiesleutel.",
+      "invalid_key": "Ongeldige encryptiesleutel. De sleutel moet 16, 24 of 32 tekens lang zijn."
     },
     "abort": {
       "already_configured": "Dit paneel is al geconfigureerd."

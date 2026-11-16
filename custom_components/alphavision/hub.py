@@ -13,6 +13,13 @@ genoeg binnenkomen).
 Entiteiten registreren zich via Home Assistants dispatcher-mechanisme
 (async_dispatcher_connect) op SIGNAL_UPDATE, en lezen de actuele status
 rechtstreeks van dit hub-object.
+
+Opzet en herverbinden zijn bewust gescheiden:
+  - async_start() blokkeert nooit op de afkoelperiode van het paneel. Lukt de
+    eerste verbinding niet, dan faalt de opzet direct (ConfigEntryNotReady) en
+    herhaalt Home Assistant die zelf.
+  - Alleen de achtergrondtaak wacht (MIN_RECONNECT_COOLDOWN) voordat hij na een
+    verbroken sessie opnieuw verbindt.
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ from .client import (
     parse_event_record,
 )
 from .const import (
+    COMMAND_TIMEOUT,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_READ_TIMEOUT,
     DEFAULT_RECONNECT_WAIT,
@@ -47,10 +55,23 @@ _LOGGER = logging.getLogger(__name__)
 class AlphaVisionHub:
     """Beheert de permanente verbinding en de actuele status van het paneel."""
 
-    def __init__(self, hass: HomeAssistant, entry_id: str, host: str, port: int, key: str) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry_id: str,
+        host: str,
+        port: int,
+        key: str,
+        session: AsyncPanelSession | None = None,
+    ) -> None:
         self.hass = hass
         self.entry_id = entry_id
-        self.client = AsyncPanelSession(host, port, key, read_timeout=DEFAULT_READ_TIMEOUT)
+        # Een door de config flow al gevalideerde (open) sessie wordt
+        # overgenomen, zodat er bij het toevoegen niet opnieuw verbonden hoeft
+        # te worden.
+        self.client = session or AsyncPanelSession(
+            host, port, key, read_timeout=DEFAULT_READ_TIMEOUT
+        )
 
         self.zone_names: dict[int, str] = {}
         self.section_names: dict[int, str] = {}
@@ -69,9 +90,9 @@ class AlphaVisionHub:
     async def async_start(self, *, startup_timeout: float = 160.0) -> None:
         """Start de achtergrondtaak en wacht tot de eerste sessie is opgezet.
 
-        Geeft de opgehaalde (zone_names, section_names) terug zodra dat lukt,
-        of laat een AlphaVisionError door als het binnen startup_timeout niet
-        lukt (voor Home Assistant om als ConfigEntryNotReady te behandelen).
+        Keert terug zodra de eerste verbinding werkt, of laat een
+        AlphaVisionError door als het binnen startup_timeout niet lukt (voor
+        Home Assistant om als ConfigEntryNotReady te behandelen).
         """
         self._task = self.hass.loop.create_task(self._run(), name=f"alphavision_{self.entry_id}")
         try:
@@ -103,6 +124,9 @@ class AlphaVisionHub:
                 await self._task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+        # Alles wat nog op een antwoord wacht moet nu een fout krijgen; anders
+        # blijft de aanroep (bijv. alarm_arm_away) eindeloos hangen.
+        self._fail_pending(AlphaVisionConnectionError("Integratie wordt gestopt"))
         await self.client.close()
 
     async def async_arm(self, section_nr: int, code: str) -> bool:
@@ -112,18 +136,39 @@ class AlphaVisionHub:
         return await self._queue_command(section_nr, "DISARM", code)
 
     async def _queue_command(self, section_nr: int, action: str, code: str) -> bool:
+        if self._stopping or not self.available:
+            raise AlphaVisionConnectionError("Paneel is niet verbonden")
         fut: asyncio.Future = self.hass.loop.create_future()
         await self._arm_queue.put((section_nr, action, code, fut))
-        return await fut
+        try:
+            return await asyncio.wait_for(fut, timeout=COMMAND_TIMEOUT)
+        except asyncio.TimeoutError as ex:
+            raise AlphaVisionConnectionError(
+                f"Geen antwoord van het paneel binnen {COMMAND_TIMEOUT:.0f}s"
+            ) from ex
+
+    def _fail_pending(self, exc: Exception) -> None:
+        """Laat alle in de wachtrij staande commando's falen met 'exc'."""
+        while not self._arm_queue.empty():
+            try:
+                _section_nr, _action, _code, fut = self._arm_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if not fut.done():
+                fut.set_exception(exc)
 
     def _notify(self) -> None:
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     async def _run(self) -> None:
         """Hoofdlus op de achtergrond: verbinden, live meeluisteren, periodiek pollen."""
+        first_attempt = True
         while not self._stopping:
             try:
-                await self.client.connect()
+                if not self.client.connected:
+                    # Alleen bij een herverbinding wachten op de afkoelperiode;
+                    # de allereerste poging (opzet/reload) blokkeert nooit.
+                    await self.client.connect(respect_cooldown=not first_attempt)
                 _LOGGER.info("Verbonden met paneel, sessie opgezet")
                 if not self.zone_names:
                     self.zone_names, self.section_names = await self.client.get_arrangement()
@@ -134,15 +179,18 @@ class AlphaVisionHub:
             except Exception as ex:  # noqa: BLE001 -- langlevende achtergrondtaak
                 await self.client.close()
                 self.available = False
+                self._fail_pending(AlphaVisionConnectionError("Verbinding met het paneel verbroken"))
                 _LOGGER.warning("Verbinden mislukt: %s -- wacht %ds", ex, DEFAULT_RECONNECT_WAIT)
                 if not self._ready.is_set():
                     self._first_error = ex if isinstance(ex, AlphaVisionError) else AlphaVisionConnectionError(str(ex))
                     self._ready.set()
                     return
                 self._notify()
+                first_attempt = False
                 await asyncio.sleep(DEFAULT_RECONNECT_WAIT)
                 continue
 
+            first_attempt = False
             try:
                 await self._session_loop()
             except asyncio.CancelledError:
@@ -151,6 +199,7 @@ class AlphaVisionHub:
                 _LOGGER.warning("Sessie verbroken: %s -- wacht %ds", ex, DEFAULT_RECONNECT_WAIT)
                 await self.client.close()
                 self.available = False
+                self._fail_pending(AlphaVisionConnectionError("Verbinding met het paneel verbroken"))
                 self._notify()
                 await asyncio.sleep(DEFAULT_RECONNECT_WAIT)
 
@@ -173,9 +222,16 @@ class AlphaVisionHub:
                     self._notify()
                     if not fut.done():
                         fut.set_result(result != RESULT_REJECTED)
-                except Exception as ex:  # noqa: BLE001
+                except BaseException as ex:  # noqa: BLE001
+                    # Ook bij annulering (stoppen van de taak) mag de aanroeper
+                    # niet blijven wachten op dit al uit de wachtrij gehaalde
+                    # commando.
                     if not fut.done():
-                        fut.set_exception(ex)
+                        fut.set_exception(
+                            ex
+                            if isinstance(ex, Exception)
+                            else AlphaVisionConnectionError("Integratie wordt gestopt")
+                        )
                     raise
 
             # -- Live meeluisteren voor tot 1 sec, dan opnieuw checken --------

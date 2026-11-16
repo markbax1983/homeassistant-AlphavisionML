@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
 from .client import AlphaVisionError
-from .const import CONF_KEY, DOMAIN
+from .const import CONF_KEY, DOMAIN, PENDING_SESSIONS
 from .hub import AlphaVisionHub
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,8 +20,19 @@ PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.ALARM_CONTROL_PANE
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Zet een AlphaVision-config-entry op."""
+    # Neem de door de config flow al gevalideerde sessie over (alleen direct na
+    # het toevoegen aanwezig); anders verbindt de hub zelf.
+    session = (
+        hass.data.get(DOMAIN, {}).get(PENDING_SESSIONS, {}).pop(entry.unique_id, None)
+    )
+
     hub = AlphaVisionHub(
-        hass, entry.entry_id, entry.data[CONF_HOST], entry.data[CONF_PORT], entry.data[CONF_KEY]
+        hass,
+        entry.entry_id,
+        entry.data[CONF_HOST],
+        entry.data[CONF_PORT],
+        entry.data[CONF_KEY],
+        session=session,
     )
 
     try:
