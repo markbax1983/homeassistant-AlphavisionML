@@ -78,9 +78,18 @@ class AsyncPanelSession:
     def connected(self) -> bool:
         return self.writer is not None
 
-    async def connect(self) -> None:
+    async def connect(self, *, respect_cooldown: bool = False) -> None:
+        """Zet een sessie op.
+
+        De afkoelperiode na een eerdere afsluiting (MIN_RECONNECT_COOLDOWN) wordt
+        alleen gerespecteerd als de aanroeper daar expliciet om vraagt. Dat is
+        bedoeld voor de achtergrondtaak van de hub bij het *her*verbinden. In het
+        opzetpad van Home Assistant (config flow, entry-setup, reload) mag nooit
+        geblokkeerd worden: een mislukte eerste poging wordt daar als
+        ConfigEntryNotReady afgehandeld en door Home Assistant zelf herhaald.
+        """
         key = (self.host, self.port)
-        last = _last_disconnect.get(key)
+        last = _last_disconnect.get(key) if respect_cooldown else None
         if last is not None:
             elapsed = time.monotonic() - last
             remaining = MIN_RECONNECT_COOLDOWN - elapsed

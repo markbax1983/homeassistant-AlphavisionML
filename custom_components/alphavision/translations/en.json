@@ -12,7 +12,8 @@
       }
     },
     "error": {
-      "cannot_connect": "Could not connect. Check the IP address, port, and encryption key."
+      "cannot_connect": "Could not connect. Check the IP address, port, and encryption key.",
+      "invalid_key": "Invalid encryption key. The key must be 16, 24, or 32 characters long."
     },
     "abort": {
       "already_configured": "This panel is already configured."

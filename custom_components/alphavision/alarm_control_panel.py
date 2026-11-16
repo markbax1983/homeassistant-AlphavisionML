@@ -30,6 +30,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .client import AlphaVisionError
 from .const import DOMAIN, SECTION_DISARMED, SIGNAL_UPDATE
 from .hub import AlphaVisionHub
 
@@ -101,14 +102,20 @@ class AlphaVisionAlarmPanel(AlarmControlPanelEntity):
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
         if not code:
             raise HomeAssistantError("Er is een code nodig om in te schakelen")
-        accepted = await self._hub.async_arm(self._section_nr, code)
+        try:
+            accepted = await self._hub.async_arm(self._section_nr, code)
+        except AlphaVisionError as ex:
+            raise HomeAssistantError(f"Inschakelen mislukt: {ex}") from ex
         if not accepted:
             raise HomeAssistantError("Inschakelen geweigerd door het paneel")
 
     async def async_alarm_disarm(self, code: str | None = None) -> None:
         if not code:
             raise HomeAssistantError("Er is een code nodig om uit te schakelen")
-        accepted = await self._hub.async_disarm(self._section_nr, code)
+        try:
+            accepted = await self._hub.async_disarm(self._section_nr, code)
+        except AlphaVisionError as ex:
+            raise HomeAssistantError(f"Uitschakelen mislukt: {ex}") from ex
         if not accepted:
             raise HomeAssistantError("Uitschakelen geweigerd door het paneel")
 
