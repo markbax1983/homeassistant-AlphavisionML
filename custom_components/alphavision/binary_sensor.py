@@ -7,6 +7,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
@@ -111,6 +112,9 @@ class AlphaVisionSystemBinarySensor(BinarySensorEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    # Technische meldingen horen niet tussen de zonesensoren, maar in het
+    # blok "Diagnostisch" op de apparaatpagina.
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(
         self,
