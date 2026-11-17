@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 import time
 
 from . import protocol as proto
@@ -340,6 +341,17 @@ def _parse_device_status(data: bytes) -> dict[str, bool]:
         "battery_fault": bool(combined & DEVICE_FLAG_BATTERY_FAULT),
         "power_unit_failure": bool(combined & DEVICE_FLAG_POWER_UNIT_FAILURE),
     }
+
+
+# Het paneel stuurt elk uur een verbindingstest (bijv. "TRANS.1 TEST") naar elke
+# geconfigureerde zender. Dat is geen echte gebeurtenis (in-/uitschakelen, alarm)
+# en wordt daarom apart bijgehouden.
+_CONNECTION_TEST_RE = re.compile(r"^TRANS\.?\s*\d*\s+TEST$", re.IGNORECASE)
+
+
+def is_connection_test(description: str) -> bool:
+    """True als de omschrijving de periodieke verbindingstest van het paneel is."""
+    return bool(_CONNECTION_TEST_RE.match(description.strip()))
 
 
 def parse_event_record(data: bytes) -> dict | None:
