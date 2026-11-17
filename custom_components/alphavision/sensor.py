@@ -26,9 +26,6 @@ class AlphaVisionLastEventSensor(SensorEntity):
     _attr_has_entity_name = True
     _attr_should_poll = False
     _attr_icon = "mdi:history"
-    # Wie wanneer in-/uitschakelde zegt iets over aanwezigheid van huisgenoten;
-    # de naam wel tonen, maar niet in de recorder-historie (en backups) bewaren.
-    _unrecorded_attributes = frozenset({"user_name"})
 
     def __init__(self, hub: AlphaVisionHub, entry: ConfigEntry) -> None:
         self._hub = hub

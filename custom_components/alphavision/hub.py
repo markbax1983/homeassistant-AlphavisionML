@@ -301,8 +301,9 @@ class AlphaVisionHub:
                 event = parse_event_record(parsed.data)
                 if event is not None:
                     self.last_event = event
-                    # Gebruikersnamen zijn persoonsgegevens (wie is wanneer
-                    # thuis): alleen op DEBUG-niveau loggen.
+                    # Wie in-/uitschakelde staat in de historie van de sensor
+                    # "Laatste gebeurtenis" (audit-trail). In het logbestand,
+                    # dat vaak in issues wordt gedeeld, alleen op DEBUG.
                     _LOGGER.info("Gebeurtenis: %s", event["description"])
                     _LOGGER.debug(
                         "Gebeurtenis-details: %s door %s (#%d) om %s",
