@@ -9,6 +9,11 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers.selector import (
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 
 from .client import AlphaVisionError, AsyncPanelSession
 from .const import CONF_KEY, DEFAULT_PORT, DOMAIN, KEY_LENGTHS, PENDING_SESSIONS
@@ -19,7 +24,10 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HOST): str,
         vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
-        vol.Required(CONF_KEY): str,
+        # Als wachtwoordveld, zodat de sleutel niet leesbaar op het scherm staat.
+        vol.Required(CONF_KEY): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        ),
     }
 )
 

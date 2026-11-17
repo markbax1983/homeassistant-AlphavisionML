@@ -51,6 +51,13 @@ SECTION_DISARMED = 0x02
 
 RESULT_REJECTED = 0x03
 
+# Bescherming tegen het raden van de pincode: na dit aantal geweigerde codes
+# op rij volgt een oplopende wachttijd (30s, 60s, 120s, ... max. 5 min)
+# waarin geen arm/disarm-poging naar het paneel wordt gestuurd.
+MAX_FAILED_CODE_ATTEMPTS = 3
+CODE_LOCKOUT_BASE = 30.0
+CODE_LOCKOUT_MAX = 300.0
+
 SIGNAL_UPDATE = f"{DOMAIN}_update"
 
 # Device-statusvlaggen -- gebaseerd op Alphatronics' eigen UNii-library en
