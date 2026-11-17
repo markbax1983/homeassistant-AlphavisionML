@@ -25,13 +25,13 @@ from homeassistant.components.alarm_control_panel import (
 from homeassistant.components.alarm_control_panel import AlarmControlPanelState
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .client import AlphaVisionError
-from .const import DOMAIN, SECTION_DISARMED, SIGNAL_UPDATE
+from .client import AlphaVisionError, AlphaVisionInvalidCodeError, AlphaVisionLockoutError
+from .const import DOMAIN, SECTION_ARMED, SECTION_DISARMED, SIGNAL_UPDATE
 from .hub import AlphaVisionHub
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,6 +68,7 @@ class AlphaVisionAlarmPanel(AlarmControlPanelEntity):
     ) -> None:
         self._hub = hub
         self._section_nr = section_nr
+        self._warned_unknown_status: set[int] = set()
         self._attr_name = name or f"Sectie {section_nr}"
         self._attr_unique_id = f"{entry.entry_id}_alarm_section_{section_nr}"
         self._attr_extra_state_attributes = {
@@ -97,13 +98,26 @@ class AlphaVisionAlarmPanel(AlarmControlPanelEntity):
             return None
         if status == SECTION_DISARMED:
             return AlarmControlPanelState.DISARMED
-        return AlarmControlPanelState.ARMED_AWAY
+        if status == SECTION_ARMED:
+            return AlarmControlPanelState.ARMED_AWAY
+        # Onbekende code: niet stilzwijgend als "ingeschakeld" tonen, maar als
+        # onbekend, en eenmalig loggen zodat de betekenis uitgezocht kan worden
+        # (bijv. een sectie in alarm).
+        if status not in self._warned_unknown_status:
+            self._warned_unknown_status.add(status)
+            _LOGGER.warning(
+                "Onbekende statuscode 0x%02X voor sectie %d (%s)",
+                status, self._section_nr, self.name,
+            )
+        return None
 
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
         if not code:
             raise HomeAssistantError("Er is een code nodig om in te schakelen")
         try:
             accepted = await self._hub.async_arm(self._section_nr, code)
+        except (AlphaVisionInvalidCodeError, AlphaVisionLockoutError) as ex:
+            raise ServiceValidationError(str(ex)) from ex
         except AlphaVisionError as ex:
             raise HomeAssistantError(f"Inschakelen mislukt: {ex}") from ex
         if not accepted:
@@ -114,6 +128,8 @@ class AlphaVisionAlarmPanel(AlarmControlPanelEntity):
             raise HomeAssistantError("Er is een code nodig om uit te schakelen")
         try:
             accepted = await self._hub.async_disarm(self._section_nr, code)
+        except (AlphaVisionInvalidCodeError, AlphaVisionLockoutError) as ex:
+            raise ServiceValidationError(str(ex)) from ex
         except AlphaVisionError as ex:
             raise HomeAssistantError(f"Uitschakelen mislukt: {ex}") from ex
         if not accepted:

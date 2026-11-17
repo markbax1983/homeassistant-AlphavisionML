@@ -24,6 +24,10 @@ Frame-indeling:
 
 from __future__ import annotations
 
+import re
+
+from Crypto.Cipher import AES  # nosec B413 -- pycryptodome (onderhouden), niet het oude PyCrypto
+
 PROTOCOL_NO_ENCRYPTION = 0x04
 PROTOCOL_BASIC_ENCRYPTION = 0x05
 PACKET_SESSION_SETUP = 0x01
@@ -53,6 +57,26 @@ CMD_REQUEST_DEVICE_STATUS = 0x0108
 CMD_DEVICE_STATUS_CHANGED = 0x0107
 CMD_EVENT_OCCURRED = 0x0102
 
+HEADER_LENGTH = 14
+CRC_LENGTH = 2
+# Kleinst mogelijke bericht: header + command-id + datalengte + CRC.
+MIN_MESSAGE_LENGTH = HEADER_LENGTH + 4 + CRC_LENGTH
+# Ruime bovengrens; de grootste bekende antwoorden zijn enkele honderden bytes.
+MAX_MESSAGE_LENGTH = 4096
+
+# Een gebruikerscode is 1..16 ASCII-cijfers (BCD-veld van 8 bytes). Bewust
+# [0-9] en niet str.isdigit(): die laat ook Unicode-cijfers zoals '²' door.
+_USER_CODE_RE = re.compile(r"[0-9]{1,16}")
+
+
+class ProtocolError(ValueError):
+    """Een ontvangen bericht voldoet niet aan het protocol."""
+
+
+def is_valid_user_code(code: str) -> bool:
+    """True als 'code' een geldige gebruikerscode (1-16 ASCII-cijfers) is."""
+    return bool(_USER_CODE_RE.fullmatch(code))
+
 
 def bcd_encode(code: str) -> bytes:
     """Codeer een numerieke gebruikerscode in BCD, opgevuld tot 16 cijfers.
@@ -60,8 +84,8 @@ def bcd_encode(code: str) -> bytes:
     Gebaseerd op Alphatronics' eigen UNii-library; empirisch bevestigd te werken
     voor AlphaVision ML's REQUEST_ARM_SECTION / REQUEST_DISARM_SECTION.
     """
-    if not code.isdigit():
-        raise ValueError("gebruikerscode mag alleen cijfers bevatten")
+    if not is_valid_user_code(code):
+        raise ValueError("gebruikerscode moet uit 1 tot 16 cijfers (0-9) bestaan")
     padded = code + "0" * (16 - len(code))
     return bytes.fromhex(padded)
 
@@ -88,8 +112,6 @@ def build_message(
     shared_key: bytes,
 ) -> bytes:
     """Bouw een compleet, versleuteld en gechecksumd bericht."""
-    from Crypto.Cipher import AES
-
     header = bytearray()
     header += session_id.to_bytes(2, "big")
     header += tx_sequence.to_bytes(4, "big")
@@ -137,19 +159,45 @@ class ParsedMessage:
 
 
 def parse_message(raw: bytes, shared_key: bytes) -> ParsedMessage:
-    """Ontleed en (indien nodig) ontsleutel een ontvangen bericht."""
-    from Crypto.Cipher import AES
+    """Controleer, ontleed en ontsleutel een ontvangen bericht.
 
-    header = raw[:14]
-    body = raw[14:-2]
+    Gooit ProtocolError bij een ongeldige lengte, een foute CRC of een
+    onversleuteld bericht. Deze integratie verstuurt zelf altijd versleuteld
+    (basis encryptie); een onversleuteld antwoord is dus nooit legitiem en zou
+    een aanvaller op het netwerk anders toestaan zonder de sleutel nep-statussen
+    te injecteren.
+    """
+    if not MIN_MESSAGE_LENGTH <= len(raw) <= MAX_MESSAGE_LENGTH:
+        raise ProtocolError(f"ongeldige berichtlengte: {len(raw)} bytes")
+
+    header = raw[:HEADER_LENGTH]
+    body = raw[HEADER_LENGTH:-CRC_LENGTH]
+
+    declared_length = int.from_bytes(header[12:14], "big")
+    if declared_length != len(raw):
+        raise ProtocolError(
+            f"lengte in header ({declared_length}) wijkt af van ontvangen lengte ({len(raw)})"
+        )
+
+    received_crc = int.from_bytes(raw[-CRC_LENGTH:], "big")
+    expected_crc = crc16(raw[:-CRC_LENGTH])
+    if received_crc != expected_crc:
+        raise ProtocolError(
+            f"CRC klopt niet (verwacht 0x{expected_crc:04X}, ontvangen 0x{received_crc:04X})"
+        )
+
+    protocol_id = header[10]
+    if protocol_id != PROTOCOL_BASIC_ENCRYPTION:
+        raise ProtocolError(
+            f"onverwacht protocol-id 0x{protocol_id:02X} (alleen versleutelde berichten worden geaccepteerd)"
+        )
+
     session_id = int.from_bytes(header[0:2], "big")
     tx_sequence = int.from_bytes(header[2:6], "big")
-    protocol_id = header[10]
 
-    if protocol_id == PROTOCOL_BASIC_ENCRYPTION:
-        iv = header[:12] + b"\x00\x00\x00\x00"
-        aes = AES.new(shared_key, AES.MODE_CTR, initial_value=iv, nonce=b"")
-        body = aes.decrypt(body)
+    iv = header[:12] + b"\x00\x00\x00\x00"
+    aes = AES.new(shared_key, AES.MODE_CTR, initial_value=iv, nonce=b"")
+    body = aes.decrypt(body)
 
     command = int.from_bytes(body[0:2], "big")
     data_length = int.from_bytes(body[2:4], "big")

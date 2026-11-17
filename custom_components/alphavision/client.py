@@ -60,6 +60,14 @@ class AlphaVisionConnectionError(AlphaVisionError):
     """De verbinding met het paneel is mislukt of weggevallen."""
 
 
+class AlphaVisionInvalidCodeError(AlphaVisionError):
+    """De opgegeven gebruikerscode heeft een ongeldig formaat."""
+
+
+class AlphaVisionLockoutError(AlphaVisionError):
+    """Te veel geweigerde codes; tijdelijk geen arm/disarm-pogingen."""
+
+
 class AsyncPanelSession:
     """Houdt 1 asyncio-verbinding met het paneel, met alle bewezen bevindingen verwerkt."""
 
@@ -159,6 +167,10 @@ class AsyncPanelSession:
             raise AlphaVisionConnectionError(f"Verbinding verbroken tijdens lezen: {ex}") from ex
 
         total_length = int.from_bytes(header[12:14], "big")
+        if not proto.MIN_MESSAGE_LENGTH <= total_length <= proto.MAX_MESSAGE_LENGTH:
+            # Een onmogelijke lengte betekent dat we de berichtgrenzen kwijt
+            # zijn (of dat er iets op de lijn is geknoeid): sessie opnieuw opzetten.
+            raise AlphaVisionConnectionError(f"Ongeldige berichtlengte in header: {total_length}")
         try:
             rest = await asyncio.wait_for(self.reader.readexactly(total_length - 14), timeout)
         except asyncio.TimeoutError:
@@ -170,9 +182,20 @@ class AsyncPanelSession:
             raise AlphaVisionConnectionError(f"Verbinding verbroken tijdens lezen: {ex}") from ex
 
         raw = header + rest
-        parsed = proto.parse_message(raw, self.key)
+        try:
+            parsed = proto.parse_message(raw, self.key)
+        except proto.ProtocolError as ex:
+            raise AlphaVisionConnectionError(f"Ongeldig bericht van het paneel: {ex}") from ex
         self.rx_seq = parsed.tx_sequence
         if parsed.session_id != self.session_id:
+            # Tijdens de handshake (0xFFFF) is dit normaal. Daarna niet verwacht,
+            # maar Alphatronics' eigen library neemt het ook stil over; we doen
+            # hetzelfde om het paneel niet te breken, maar maken het zichtbaar.
+            if self.session_id != 0xFFFF:
+                _LOGGER.warning(
+                    "Sessie-ID gewijzigd door paneel (0x%04X -> 0x%04X)",
+                    self.session_id, parsed.session_id,
+                )
             self.session_id = parsed.session_id
         return parsed
 
@@ -249,16 +272,25 @@ class AsyncPanelSession:
     async def arm_section(self, section_nr: int, code: str) -> int:
         data = bytes([0x00]) + proto.bcd_encode(code) + bytes([section_nr & 0xFF, 0x01])
         resp = await self.request(proto.CMD_REQUEST_ARM_SECTION, data, proto.CMD_RESPONSE_ARM_SECTION)
-        return resp.data[1]
+        return _result_code(resp)
 
     async def disarm_section(self, section_nr: int, code: str) -> int:
         data = bytes([0x00]) + proto.bcd_encode(code) + bytes([section_nr & 0xFF, 0x01])
         resp = await self.request(proto.CMD_REQUEST_DISARM_SECTION, data, proto.CMD_RESPONSE_DISARM_SECTION)
-        return resp.data[1]
+        return _result_code(resp)
 
     async def get_device_status(self) -> dict[str, bool]:
         resp = await self.request(proto.CMD_REQUEST_DEVICE_STATUS, b"", proto.CMD_DEVICE_STATUS_CHANGED)
         return _parse_device_status(resp.data)
+
+
+def _result_code(resp: proto.ParsedMessage) -> int:
+    """Resultaatcode uit een arm/disarm-antwoord (byte 1 van de data)."""
+    if len(resp.data) < 2:
+        raise AlphaVisionError(
+            f"Onvolledig antwoord op commando 0x{resp.command:04X} ({len(resp.data)} bytes data)"
+        )
+    return resp.data[1]
 
 
 def _parse_section_arrangement(data: bytes) -> dict[int, str]:

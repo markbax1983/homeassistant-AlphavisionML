@@ -47,6 +47,19 @@ Configuratie verloopt volledig via de UI:
 2. Zoek naar **AlphaVision ML**.
 3. Vul het IP-adres, de poort (standaard `6502`) en de encryptiesleutel van het paneel in.
 
+## Beveiliging
+
+Het protocol van de Generieke Interface versleutelt berichten (AES-CTR), maar
+beschermt ze niet tegen wijziging onderweg. Iemand die verkeer tussen Home Assistant
+en het paneel kan onderscheppen, kan in theorie statusberichten manipuleren.
+Advies:
+
+- Zet het alarmpaneel in een apart netwerksegment (VLAN) waar alleen Home Assistant
+  bij kan, en blokkeer poort 6502 voor alle andere apparaten.
+- Gebruik een sterke, willekeurige encryptiesleutel van 32 tekens.
+- Na 3 onjuiste codes op rij blokkeert de integratie in-/uitschakelen tijdelijk
+  (oplopend tot 5 minuten) en verschijnt er een melding in Home Assistant.
+
 ## Let op
 
 Dit is een niet-officiële integratie, gebaseerd op reverse-engineering van het protocol

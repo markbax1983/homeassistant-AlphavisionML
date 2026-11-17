@@ -28,22 +28,29 @@ import asyncio
 import logging
 import time
 
+from homeassistant.components import persistent_notification
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .client import (
     AlphaVisionConnectionError,
     AlphaVisionError,
+    AlphaVisionInvalidCodeError,
+    AlphaVisionLockoutError,
     AsyncPanelSession,
     _parse_input_status,
     parse_event_record,
 )
 from .const import (
+    CODE_LOCKOUT_BASE,
+    CODE_LOCKOUT_MAX,
     COMMAND_TIMEOUT,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_READ_TIMEOUT,
     DEFAULT_RECONNECT_WAIT,
     DEVICE_STATUS_POLL_INTERVAL,
+    DOMAIN,
+    MAX_FAILED_CODE_ATTEMPTS,
     RESULT_REJECTED,
     SIGNAL_UPDATE,
 )
@@ -86,6 +93,9 @@ class AlphaVisionHub:
         self._arm_queue: asyncio.Queue = asyncio.Queue()
         self._ready = asyncio.Event()
         self._first_error: Exception | None = None
+        self._failed_code_attempts = 0
+        self._lockout_until = 0.0
+        self._code_lock = asyncio.Lock()
 
     async def async_start(self, *, startup_timeout: float = 160.0) -> None:
         """Start de achtergrondtaak en wacht tot de eerste sessie is opgezet.
@@ -136,16 +146,55 @@ class AlphaVisionHub:
         return await self._queue_command(section_nr, "DISARM", code)
 
     async def _queue_command(self, section_nr: int, action: str, code: str) -> bool:
-        if self._stopping or not self.available:
-            raise AlphaVisionConnectionError("Paneel is niet verbonden")
-        fut: asyncio.Future = self.hass.loop.create_future()
-        await self._arm_queue.put((section_nr, action, code, fut))
-        try:
-            return await asyncio.wait_for(fut, timeout=COMMAND_TIMEOUT)
-        except asyncio.TimeoutError as ex:
-            raise AlphaVisionConnectionError(
-                f"Geen antwoord van het paneel binnen {COMMAND_TIMEOUT:.0f}s"
-            ) from ex
+        # Formaat controleren voordat er iets in de wachtrij komt: een
+        # ongeldige code mag de sessie met het paneel nooit kunnen verstoren.
+        if not proto.is_valid_user_code(code):
+            raise AlphaVisionInvalidCodeError("De code moet uit 1 tot 16 cijfers (0-9) bestaan")
+        # Codepogingen strikt na elkaar, zodat veel gelijktijdige aanroepen de
+        # blokkade na herhaalde onjuiste codes niet kunnen omzeilen.
+        async with self._code_lock:
+            remaining = self._lockout_until - time.monotonic()
+            if remaining > 0:
+                raise AlphaVisionLockoutError(
+                    f"Te veel onjuiste codes; probeer het over {remaining:.0f}s opnieuw"
+                )
+            if self._stopping or not self.available:
+                raise AlphaVisionConnectionError("Paneel is niet verbonden")
+            fut: asyncio.Future = self.hass.loop.create_future()
+            await self._arm_queue.put((section_nr, action, code, fut))
+            try:
+                accepted = await asyncio.wait_for(fut, timeout=COMMAND_TIMEOUT)
+            except asyncio.TimeoutError as ex:
+                raise AlphaVisionConnectionError(
+                    f"Geen antwoord van het paneel binnen {COMMAND_TIMEOUT:.0f}s"
+                ) from ex
+            self._register_code_result(accepted)
+            return accepted
+
+    def _register_code_result(self, accepted: bool) -> None:
+        """Houd geweigerde codes bij en zet zo nodig een tijdelijke blokkade."""
+        if accepted:
+            self._failed_code_attempts = 0
+            self._lockout_until = 0.0
+            return
+        self._failed_code_attempts += 1
+        if self._failed_code_attempts < MAX_FAILED_CODE_ATTEMPTS:
+            return
+        over = self._failed_code_attempts - MAX_FAILED_CODE_ATTEMPTS
+        lockout = min(CODE_LOCKOUT_BASE * (2**over), CODE_LOCKOUT_MAX)
+        self._lockout_until = time.monotonic() + lockout
+        _LOGGER.warning(
+            "%d onjuiste codes op rij voor het AlphaVision-paneel -- arm/disarm "
+            "%.0fs geblokkeerd", self._failed_code_attempts, lockout,
+        )
+        persistent_notification.async_create(
+            self.hass,
+            f"Er zijn {self._failed_code_attempts} onjuiste codes op rij ingevoerd "
+            f"voor het alarmpaneel. In-/uitschakelen via Home Assistant is "
+            f"{lockout:.0f} seconden geblokkeerd.",
+            title="AlphaVision ML: onjuiste codes",
+            notification_id=f"{DOMAIN}_{self.entry_id}_code_lockout",
+        )
 
     def _fail_pending(self, exc: Exception) -> None:
         """Laat alle in de wachtrij staande commando's falen met 'exc'."""
@@ -214,6 +263,13 @@ class AlphaVisionHub:
             while not self._arm_queue.empty():
                 section_nr, action, code, fut = self._arm_queue.get_nowait()
                 try:
+                    # Vangnet: hoort al in _queue_command te zijn afgevangen.
+                    # Bij een ongeldige code is er nog niets verstuurd, dus de
+                    # sessie blijft gewoon intact.
+                    if not proto.is_valid_user_code(code):
+                        if not fut.done():
+                            fut.set_exception(AlphaVisionInvalidCodeError("Ongeldige code"))
+                        continue
                     if action == "ARM_AWAY":
                         result = await self.client.arm_section(section_nr, code)
                     else:
@@ -245,8 +301,12 @@ class AlphaVisionHub:
                 event = parse_event_record(parsed.data)
                 if event is not None:
                     self.last_event = event
-                    _LOGGER.info(
-                        "Gebeurtenis: %s door %s (#%d) om %s",
+                    # Wie in-/uitschakelde staat in de historie van de sensor
+                    # "Laatste gebeurtenis" (audit-trail). In het logbestand,
+                    # dat vaak in issues wordt gedeeld, alleen op DEBUG.
+                    _LOGGER.info("Gebeurtenis: %s", event["description"])
+                    _LOGGER.debug(
+                        "Gebeurtenis-details: %s door %s (#%d) om %s",
                         event["description"], event["user_name"], event["user_number"],
                         event["timestamp"],
                     )
