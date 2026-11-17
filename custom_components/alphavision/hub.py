@@ -39,6 +39,7 @@ from .client import (
     AlphaVisionLockoutError,
     AsyncPanelSession,
     _parse_input_status,
+    is_connection_test,
     parse_event_record,
 )
 from .const import (
@@ -86,6 +87,9 @@ class AlphaVisionHub:
         self.section_status: dict[int, int] = {}
         self.device_status: dict[str, bool] = {}
         self.last_event: dict | None = None
+        # Periodieke verbindingstest van het paneel (bijv. "TRANS.1 TEST"), apart
+        # van de echte gebeurtenissen zodat die niet worden weggedrukt.
+        self.last_test: dict | None = None
         self.available = False
 
         self._task: asyncio.Task | None = None
@@ -299,7 +303,11 @@ class AlphaVisionHub:
                 self._notify()
             elif parsed is not None and parsed.command == proto.CMD_EVENT_OCCURRED:
                 event = parse_event_record(parsed.data)
-                if event is not None:
+                if event is not None and is_connection_test(event["description"]):
+                    self.last_test = event
+                    _LOGGER.debug("Verbindingstest van het paneel: %s", event["timestamp"])
+                    self._notify()
+                elif event is not None:
                     self.last_event = event
                     # Wie in-/uitschakelde staat in de historie van de sensor
                     # "Laatste gebeurtenis" (audit-trail). In het logbestand,
